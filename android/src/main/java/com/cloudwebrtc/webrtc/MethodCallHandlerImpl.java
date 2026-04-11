@@ -3,6 +3,7 @@ package com.cloudwebrtc.webrtc;
 import static com.cloudwebrtc.webrtc.utils.MediaConstraintsUtils.parseMediaConstraints;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.graphics.SurfaceTexture;
@@ -142,6 +143,9 @@ public class MethodCallHandlerImpl implements MethodCallHandler, StateProvider {
 
   public AudioProcessingController audioProcessingController;
 
+  @Nullable private Intent pendingMediaProjectionPermissionResultData;
+  private int pendingMediaProjectionPermissionResultCode = Activity.RESULT_CANCELED;
+
   public static class LogSink implements Loggable {
     @Override
     public void onLogMessage(String message, Severity sev, String tag) {
@@ -199,6 +203,9 @@ public class MethodCallHandlerImpl implements MethodCallHandler, StateProvider {
                     .createInitializationOptions());
 
     getUserMediaImpl = new GetUserMediaImpl(this, context);
+    getUserMediaImpl.setPreauthorizedMediaProjectionResult(
+            pendingMediaProjectionPermissionResultCode,
+            pendingMediaProjectionPermissionResultData);
 
     cameraUtils = new CameraUtils(getUserMediaImpl, activity);
 
@@ -2233,6 +2240,14 @@ public class MethodCallHandlerImpl implements MethodCallHandler, StateProvider {
 
   public void setActivity(Activity activity) {
     this.activity = activity;
+  }
+
+  public void setPreauthorizedMediaProjectionResult(int resultCode, @Nullable Intent data) {
+    pendingMediaProjectionPermissionResultCode = resultCode;
+    pendingMediaProjectionPermissionResultData = data;
+    if (getUserMediaImpl != null) {
+      getUserMediaImpl.setPreauthorizedMediaProjectionResult(resultCode, data);
+    }
   }
 
   public void addTrack(String peerConnectionId, String trackId, List<String> streamIds, Result result) {

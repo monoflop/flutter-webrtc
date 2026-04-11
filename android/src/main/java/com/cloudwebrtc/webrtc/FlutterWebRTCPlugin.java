@@ -3,6 +3,7 @@ package com.cloudwebrtc.webrtc;
 import android.app.Activity;
 import android.app.Application;
 import android.content.Context;
+import android.content.Intent;
 import android.os.Bundle;
 import android.util.Log;
 
@@ -35,6 +36,8 @@ public class FlutterWebRTCPlugin implements FlutterPlugin, ActivityAware, EventC
 
     static public final String TAG = "FlutterWebRTCPlugin";
     private static Application application;
+    private static Intent pendingMediaProjectionPermissionResultData;
+    private static int pendingMediaProjectionPermissionResultCode = Activity.RESULT_CANCELED;
 
     private MethodChannel methodChannel;
     private MethodCallHandlerImpl methodCallHandler;
@@ -67,6 +70,15 @@ public class FlutterWebRTCPlugin implements FlutterPlugin, ActivityAware, EventC
 
     public MediaStreamTrack getRemoteTrack(String trackId) {
         return methodCallHandler.getRemoteTrack(trackId);
+    }
+
+    public static void setPreauthorizedMediaProjectionResult(int resultCode, @androidx.annotation.Nullable Intent data) {
+        pendingMediaProjectionPermissionResultCode = resultCode;
+        pendingMediaProjectionPermissionResultData = data;
+        FlutterWebRTCPlugin plugin = sharedSingleton;
+        if (plugin != null && plugin.methodCallHandler != null) {
+            plugin.methodCallHandler.setPreauthorizedMediaProjectionResult(resultCode, data);
+        }
     }
 
     @Override
@@ -114,6 +126,9 @@ public class FlutterWebRTCPlugin implements FlutterPlugin, ActivityAware, EventC
                                 TextureRegistry textureRegistry) {
         AudioSwitchManager.instance = new AudioSwitchManager(context);
         methodCallHandler = new MethodCallHandlerImpl(context, messenger, textureRegistry);
+        methodCallHandler.setPreauthorizedMediaProjectionResult(
+                pendingMediaProjectionPermissionResultCode,
+                pendingMediaProjectionPermissionResultData);
         methodChannel = new MethodChannel(messenger, "FlutterWebRTC.Method");
         methodChannel.setMethodCallHandler(methodCallHandler);
         eventChannel = new EventChannel( messenger,"FlutterWebRTC.Event");

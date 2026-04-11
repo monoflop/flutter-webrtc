@@ -118,6 +118,14 @@ public class GetUserMediaImpl {
     private boolean isTorchOn;
     private Intent mediaProjectionData = null;
 
+    public void setPreauthorizedMediaProjectionResult(int resultCode, @Nullable Intent data) {
+        if (resultCode == Activity.RESULT_OK && data != null) {
+            mediaProjectionData = data;
+        } else {
+            mediaProjectionData = null;
+        }
+    }
+
 
     public void screenRequestPermissions(ResultReceiver resultReceiver) {
         mediaProjectionData = null;
@@ -154,9 +162,11 @@ public class GetUserMediaImpl {
                     protected void onReceiveResult(int requestCode, Bundle resultData) {
                         int resultCode = resultData.getInt(GRANT_RESULTS);
                         if (resultCode == Activity.RESULT_OK) {
-                            mediaProjectionData = resultData.getParcelable(PROJECTION_DATA);
+                            setPreauthorizedMediaProjectionResult(
+                                    resultCode, resultData.getParcelable(PROJECTION_DATA));
                             result.success(true);
                         } else {
+                            setPreauthorizedMediaProjectionResult(resultCode, null);
                             result.success(false);
                         }
                     }
