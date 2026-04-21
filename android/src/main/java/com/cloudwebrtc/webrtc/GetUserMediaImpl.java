@@ -12,8 +12,8 @@ import android.content.pm.PackageManager;
 import android.graphics.Point;
 import android.hardware.camera2.CameraManager;
 import android.media.AudioDeviceInfo;
-import android.media.projection.MediaProjection;
 import android.media.projection.MediaProjectionManager;
+import android.media.projection.MediaProjection;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Build.VERSION;
@@ -36,6 +36,7 @@ import androidx.annotation.RequiresApi;
 import com.cloudwebrtc.webrtc.audio.AudioSwitchManager;
 import com.cloudwebrtc.webrtc.audio.AudioUtils;
 import com.cloudwebrtc.webrtc.audio.LocalAudioTrack;
+import com.cloudwebrtc.webrtc.audio.ScreenAudioCaptureController;
 import com.cloudwebrtc.webrtc.record.AudioChannel;
 import com.cloudwebrtc.webrtc.record.AudioSamplesInterceptor;
 import com.cloudwebrtc.webrtc.record.MediaRecorderImpl;
@@ -79,6 +80,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.HashSet;
+import java.util.Set;
 
 import io.flutter.plugin.common.MethodChannel.Result;
 
@@ -117,6 +120,18 @@ public class GetUserMediaImpl {
     private AudioDeviceInfo preferredInput = null;
     private boolean isTorchOn;
     private Intent mediaProjectionData = null;
+    ScreenAudioCaptureController screenAudioCaptureController;
+    private final Set<String> displayAudioTrackIds = new HashSet<>();
+
+    private static final class DisplayAudioRequest {
+        final boolean requested;
+        final boolean required;
+
+        DisplayAudioRequest(boolean requested, boolean required) {
+            this.requested = requested;
+            this.required = required;
+        }
+    }
 
     public void setPreauthorizedMediaProjectionResult(int resultCode, @Nullable Intent data) {
         if (resultCode == Activity.RESULT_OK && data != null) {
@@ -493,6 +508,16 @@ public class GetUserMediaImpl {
 
     void getDisplayMedia(
             final ConstraintsMap constraints, final Result result, final MediaStream mediaStream) {
+        final DisplayAudioRequest displayAudioRequest = parseDisplayAudioRequest(constraints);
+        Log.i(
+                TAG,
+                "getDisplayMedia(audio): requested="
+                        + displayAudioRequest.requested
+                        + ", required="
+                        + displayAudioRequest.required
+                        + ", apiLevel="
+                        + VERSION.SDK_INT);
+
         if (mediaProjectionData == null) {
             screenRequestPermissions(
                     new ResultReceiver(new Handler(Looper.getMainLooper())) {
@@ -505,25 +530,40 @@ public class GetUserMediaImpl {
                                 resultError("screenRequestPermissions", "User didn't give permission to capture the screen.", result);
                                 return;
                             }
-                            getDisplayMedia(result, mediaStream, mediaProjectionData);
+                            getDisplayMedia(result, mediaStream, mediaProjectionData, displayAudioRequest);
                         }
                     });
         } else {
-            getDisplayMedia(result, mediaStream, mediaProjectionData);
+            getDisplayMedia(result, mediaStream, mediaProjectionData, displayAudioRequest);
         }
     }
 
-    private void getDisplayMedia(final Result result, final MediaStream mediaStream, final Intent mediaProjectionData) {
+    private void getDisplayMedia(
+            final Result result,
+            final MediaStream mediaStream,
+            final Intent mediaProjectionData,
+            final DisplayAudioRequest displayAudioRequest) {
+        MediaProjection mediaProjection = createMediaProjection(mediaProjectionData);
+        if (mediaProjection == null) {
+            resultError("getDisplayMedia", "Failed to create MediaProjection for display capture.", result);
+            return;
+        }
+
         /* Create ScreenCapture */
         VideoTrack displayTrack = null;
         VideoCapturer videoCapturer = null;
+        final String[] displayTrackIdRef = new String[1];
+        final String[] displayAudioTrackIdRef = new String[1];
         videoCapturer =
                 new OrientationAwareScreenCapturer(
-                        mediaProjectionData,
+                        mediaProjection,
                         new MediaProjection.Callback() {
                             @Override
                             public void onStop() {
                                 super.onStop();
+                                Log.i(TAG, "Display capture projection stopped by system/user");
+                                cleanupDisplayCapture(
+                                        mediaStream, displayTrackIdRef[0], displayAudioTrackIdRef[0]);
                                 // After Huawei P30 and Android 10 version test, the onstop method is called, which will not affect the next process,
                                 // and there is no need to call the resulterror method
                                 //resultError("MediaProjection.Callback()", "User revoked permission to capture the screen.", result);
@@ -561,7 +601,9 @@ public class GetUserMediaImpl {
         Log.d(TAG, "OrientationAwareScreenCapturer.startCapture: " + info.width + "x" + info.height + "@" + info.fps);
 
         String trackId = stateProvider.getNextTrackUUID();
+        displayTrackIdRef[0] = trackId;
         mVideoCapturers.put(trackId, info);
+        mSurfaceTextureHelpers.put(trackId, surfaceTextureHelper);
 
         displayTrack = pcFactory.createVideoTrack(trackId, videoSource);
 
@@ -591,14 +633,180 @@ public class GetUserMediaImpl {
             mediaStream.addTrack(displayTrack);
         }
 
+        if (displayAudioRequest.requested) {
+            ConstraintsMap displayAudioTrack = maybeCreateDisplayAudioTrack(mediaStream, mediaProjection);
+            if (displayAudioTrack != null) {
+                displayAudioTrackIdRef[0] = displayAudioTrack.getString("id");
+                audioTracks.pushMap(displayAudioTrack);
+                Log.i(TAG, "Audio track added to stream: yes");
+            } else {
+                maybeLogDisplayAudioFallback(displayAudioRequest);
+            }
+        } else {
+            maybeLogDisplayAudioFallback(displayAudioRequest);
+        }
+
         String streamId = mediaStream.getId();
 
         Log.d(TAG, "MediaStream id: " + streamId);
+        Log.i(
+                TAG,
+                "getDisplayMedia result: audioTrackAdded="
+                        + !audioTracks.toArrayList().isEmpty()
+                        + ", videoTrackAdded="
+                        + !videoTracks.toArrayList().isEmpty());
         stateProvider.putLocalStream(streamId, mediaStream);
         successResult.putString("streamId", streamId);
         successResult.putArray("audioTracks", audioTracks.toArrayList());
         successResult.putArray("videoTracks", videoTracks.toArrayList());
         result.success(successResult.toMap());
+    }
+
+    private DisplayAudioRequest parseDisplayAudioRequest(@Nullable ConstraintsMap constraints) {
+        if (constraints == null || !constraints.hasKey("audio")) {
+            return new DisplayAudioRequest(false, false);
+        }
+
+        ObjectType audioType = constraints.getType("audio");
+        if (audioType == ObjectType.Boolean) {
+            boolean requested = constraints.getBoolean("audio");
+            return new DisplayAudioRequest(requested, requested);
+        }
+
+        if (audioType == ObjectType.Map) {
+            ConstraintsMap audioConstraints = constraints.getMap("audio");
+            boolean requested = false;
+            boolean required = false;
+
+            if (audioConstraints.hasKey("deviceAudio")
+                    && audioConstraints.getType("deviceAudio") == ObjectType.Boolean) {
+                requested = audioConstraints.getBoolean("deviceAudio");
+            }
+
+            if (audioConstraints.hasKey("required")
+                    && audioConstraints.getType("required") == ObjectType.Boolean) {
+                required = audioConstraints.getBoolean("required");
+            } else {
+                required = requested;
+            }
+
+            return new DisplayAudioRequest(requested, required);
+        }
+
+        return new DisplayAudioRequest(false, false);
+    }
+
+    private void maybeLogDisplayAudioFallback(DisplayAudioRequest displayAudioRequest) {
+        if (!displayAudioRequest.requested) {
+            Log.i(TAG, "Display audio requested: no");
+            Log.i(TAG, "Playback capture attempted: no");
+            Log.i(TAG, "Playback capture initialized successfully: no");
+            Log.i(TAG, "Audio track added to stream: no");
+            return;
+        }
+
+        Log.i(TAG, "Display audio requested: yes");
+
+        if (VERSION.SDK_INT < VERSION_CODES.Q) {
+            Log.w(TAG, "Playback capture attempted: no");
+            Log.w(TAG, "Playback capture initialized successfully: no");
+            Log.w(TAG, "Audio track added to stream: no");
+            Log.w(TAG, "Falling back to video-only: Android playback capture requires API 29+");
+            return;
+        }
+
+        Log.w(TAG, "Audio track added to stream: no");
+    }
+
+    private ConstraintsMap maybeCreateDisplayAudioTrack(
+            MediaStream mediaStream, MediaProjection mediaProjection) {
+        if (VERSION.SDK_INT < VERSION_CODES.Q) {
+            Log.w(TAG, "Playback capture attempted: no");
+            Log.w(TAG, "Playback capture initialized successfully: no");
+            Log.w(TAG, "Falling back to video-only: Android playback capture requires API 29+");
+            return null;
+        }
+
+        if (screenAudioCaptureController == null || !screenAudioCaptureController.activate(mediaProjection)) {
+            Log.w(TAG, "Playback capture initialized successfully: no");
+            Log.w(TAG, "Falling back to video-only: failed to activate playback capture controller");
+            return null;
+        }
+
+        MediaConstraints audioConstraints = new MediaConstraints();
+        String trackId = stateProvider.getNextTrackUUID();
+        PeerConnectionFactory pcFactory = stateProvider.getPeerConnectionFactory();
+        AudioSource audioSource = pcFactory.createAudioSource(audioConstraints);
+        AudioTrack track = pcFactory.createAudioTrack(trackId, audioSource);
+        if (track == null) {
+            screenAudioCaptureController.deactivate();
+            Log.w(TAG, "Playback capture initialized successfully: no");
+            Log.w(TAG, "Falling back to video-only: failed to create display audio track");
+            return null;
+        }
+        mediaStream.addTrack(track);
+
+        stateProvider.putLocalTrack(track.id(), new LocalAudioTrack(track));
+        displayAudioTrackIds.add(track.id());
+
+        ConstraintsMap trackParams = new ConstraintsMap();
+        trackParams.putBoolean("enabled", track.enabled());
+        trackParams.putString("id", track.id());
+        trackParams.putString("kind", "audio");
+        trackParams.putString("label", track.id());
+        trackParams.putString("readyState", track.state().toString());
+        trackParams.putBoolean("remote", false);
+
+        ConstraintsMap settings = new ConstraintsMap();
+        settings.putString("deviceId", ScreenAudioCaptureController.getDeviceId());
+        settings.putString("kind", "audioinput");
+        settings.putBoolean("echoCancellation", false);
+        settings.putBoolean("noiseSuppression", false);
+        settings.putBoolean("autoGainControl", false);
+        trackParams.putMap("settings", settings.toMap());
+        return trackParams;
+    }
+
+    @Nullable
+    private MediaProjection createMediaProjection(Intent mediaProjectionData) {
+        Activity activity = stateProvider.getActivity();
+        if (activity == null) {
+            Log.w(TAG, "Cannot create MediaProjection without an Activity");
+            return null;
+        }
+
+        MediaProjectionManager mediaProjectionManager =
+                (MediaProjectionManager) activity.getSystemService(Context.MEDIA_PROJECTION_SERVICE);
+        if (mediaProjectionManager == null) {
+            Log.w(TAG, "MediaProjectionManager is not available");
+            return null;
+        }
+
+        return mediaProjectionManager.getMediaProjection(Activity.RESULT_OK, mediaProjectionData);
+    }
+
+    private void cleanupDisplayCapture(
+            MediaStream mediaStream,
+            @Nullable String videoTrackId,
+            @Nullable String audioTrackId) {
+        if (audioTrackId != null) {
+            LocalTrack audioTrack = stateProvider.getLocalTrack(audioTrackId);
+            if (audioTrack instanceof LocalAudioTrack) {
+                audioTrack.setEnabled(false);
+                mediaStream.removeTrack((AudioTrack) audioTrack.track);
+            }
+            removeAudioCapturer(audioTrackId);
+        }
+
+        if (videoTrackId != null) {
+            LocalTrack localTrack = stateProvider.getLocalTrack(videoTrackId);
+            if (localTrack instanceof LocalVideoTrack) {
+                localTrack.setEnabled(false);
+                mediaStream.removeTrack((VideoTrack) localTrack.track);
+            }
+
+            removeVideoCapturer(videoTrackId);
+        }
     }
 
     /**
@@ -868,6 +1076,20 @@ public class GetUserMediaImpl {
                     mSurfaceTextureHelpers.remove(id);
                 }
             }
+        }
+    }
+
+    void removeAudioCapturer(String id) {
+        if (!displayAudioTrackIds.remove(id)) {
+            return;
+        }
+
+        if (screenAudioCaptureController != null && !displayAudioTrackIds.isEmpty()) {
+            return;
+        }
+
+        if (screenAudioCaptureController != null) {
+            screenAudioCaptureController.deactivate();
         }
     }
 

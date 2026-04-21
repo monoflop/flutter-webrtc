@@ -31,6 +31,7 @@ import com.cloudwebrtc.webrtc.audio.AudioUtils;
 import com.cloudwebrtc.webrtc.audio.LocalAudioTrack;
 import com.cloudwebrtc.webrtc.audio.PlaybackSamplesReadyCallbackAdapter;
 import com.cloudwebrtc.webrtc.audio.RecordSamplesReadyCallbackAdapter;
+import com.cloudwebrtc.webrtc.audio.ScreenAudioCaptureController;
 import com.cloudwebrtc.webrtc.record.AudioChannel;
 import com.cloudwebrtc.webrtc.record.FrameCapturer;
 import com.cloudwebrtc.webrtc.utils.AnyThreadResult;
@@ -120,6 +121,8 @@ public class MethodCallHandlerImpl implements MethodCallHandler, StateProvider {
   public RecordSamplesReadyCallbackAdapter recordSamplesReadyCallbackAdapter;
 
   public PlaybackSamplesReadyCallbackAdapter playbackSamplesReadyCallbackAdapter;
+
+  public ScreenAudioCaptureController screenAudioCaptureController;
 
   /**
    * The implementation of {@code getUserMedia} extracted into a separate file in order to reduce
@@ -236,6 +239,7 @@ public class MethodCallHandlerImpl implements MethodCallHandler, StateProvider {
 
     recordSamplesReadyCallbackAdapter = new RecordSamplesReadyCallbackAdapter();
     playbackSamplesReadyCallbackAdapter = new PlaybackSamplesReadyCallbackAdapter();
+    screenAudioCaptureController = new ScreenAudioCaptureController();
 
     if(bypassVoiceProcessing) {
       audioDeviceModuleBuilder.setUseHardwareAcousticEchoCanceler(false)
@@ -285,6 +289,7 @@ public class MethodCallHandlerImpl implements MethodCallHandler, StateProvider {
     }
 
     audioDeviceModuleBuilder.setSamplesReadyCallback(recordSamplesReadyCallbackAdapter);
+    audioDeviceModuleBuilder.setAudioBufferCallback(screenAudioCaptureController);
     audioDeviceModuleBuilder.setPlaybackSamplesReadyCallback(playbackSamplesReadyCallbackAdapter);
 
     recordSamplesReadyCallbackAdapter.addCallback(getUserMediaImpl.inputSamplesInterceptor);
@@ -309,6 +314,7 @@ public class MethodCallHandlerImpl implements MethodCallHandler, StateProvider {
     }
 
     audioDeviceModule = audioDeviceModuleBuilder.createAudioDeviceModule();
+    screenAudioCaptureController.attachAudioDeviceModule(audioDeviceModule);
 
     if(!bypassVoiceProcessing) {
        if(JavaAudioDeviceModule.isBuiltInNoiseSuppressorSupported()) {
@@ -318,6 +324,7 @@ public class MethodCallHandlerImpl implements MethodCallHandler, StateProvider {
 
 
     getUserMediaImpl.audioDeviceModule = (JavaAudioDeviceModule) audioDeviceModule;
+    getUserMediaImpl.screenAudioCaptureController = screenAudioCaptureController;
 
     final Options options = new Options();
     options.networkIgnoreMask = networkIgnoreMask;
@@ -1740,6 +1747,8 @@ public class MethodCallHandlerImpl implements MethodCallHandler, StateProvider {
     track.setEnabled(false);
     if (track instanceof LocalVideoTrack) {
       getUserMediaImpl.removeVideoCapturer(trackId);
+    } else if (track instanceof LocalAudioTrack) {
+      getUserMediaImpl.removeAudioCapturer(trackId);
     }
     synchronized (localTracks) {
       localTracks.remove(trackId);
@@ -1841,6 +1850,7 @@ public class MethodCallHandlerImpl implements MethodCallHandler, StateProvider {
     }
     if (track.kind().equals("audio")) {
       stream.removeTrack((AudioTrack) track.track);
+      getUserMediaImpl.removeAudioCapturer(_trackId);
     } else if (track.kind().equals("video")) {
       stream.removeTrack((VideoTrack) track.track);
       getUserMediaImpl.removeVideoCapturer(_trackId);
@@ -2151,6 +2161,7 @@ public class MethodCallHandlerImpl implements MethodCallHandler, StateProvider {
       synchronized (localTracks) {
         localTracks.remove(track.id());
       }
+      getUserMediaImpl.removeAudioCapturer(track.id());
       stream.removeTrack(track);
     }
   }

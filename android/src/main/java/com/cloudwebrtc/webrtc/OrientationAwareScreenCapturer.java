@@ -33,6 +33,7 @@ public class OrientationAwareScreenCapturer implements VideoCapturer, VideoSink 
     // DPI for VirtualDisplay, does not seem to matter for us.
     private static final int VIRTUAL_DISPLAY_DPI = 400;
     private final Intent mediaProjectionPermissionResultData;
+    private final MediaProjection sharedMediaProjection;
     private final MediaProjection.Callback mediaProjectionCallback;
     private int width;
     private int height;
@@ -60,6 +61,14 @@ public class OrientationAwareScreenCapturer implements VideoCapturer, VideoSink 
     public OrientationAwareScreenCapturer(Intent mediaProjectionPermissionResultData,
                                           MediaProjection.Callback mediaProjectionCallback) {
         this.mediaProjectionPermissionResultData = mediaProjectionPermissionResultData;
+        this.sharedMediaProjection = null;
+        this.mediaProjectionCallback = mediaProjectionCallback;
+    }
+
+    public OrientationAwareScreenCapturer(
+            MediaProjection mediaProjection, MediaProjection.Callback mediaProjectionCallback) {
+        this.mediaProjectionPermissionResultData = null;
+        this.sharedMediaProjection = mediaProjection;
         this.mediaProjectionCallback = mediaProjectionCallback;
     }
 
@@ -123,8 +132,12 @@ public class OrientationAwareScreenCapturer implements VideoCapturer, VideoSink 
             this.width = height;
         }
 
-        mediaProjection = mediaProjectionManager.getMediaProjection(
-                Activity.RESULT_OK, mediaProjectionPermissionResultData);
+        if (sharedMediaProjection != null) {
+            mediaProjection = sharedMediaProjection;
+        } else {
+            mediaProjection = mediaProjectionManager.getMediaProjection(
+                    Activity.RESULT_OK, mediaProjectionPermissionResultData);
+        }
 
         // Let MediaProjection callback use the SurfaceTextureHelper thread.
         mediaProjection.registerCallback(mediaProjectionCallback, surfaceTextureHelper.getHandler());
