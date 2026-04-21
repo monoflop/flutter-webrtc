@@ -15,6 +15,7 @@ import androidx.annotation.RequiresApi;
 import org.webrtc.audio.JavaAudioDeviceModule;
 
 import java.nio.ByteBuffer;
+import java.lang.reflect.Method;
 
 public class ScreenAudioCaptureController implements JavaAudioDeviceModule.AudioBufferCallback {
     private static final String TAG = "FlutterWebRTCPlugin";
@@ -52,9 +53,7 @@ public class ScreenAudioCaptureController implements JavaAudioDeviceModule.Audio
             this.mediaProjection = mediaProjection;
             this.active = true;
             this.warnedUnsupported = false;
-            if (audioDeviceModule != null) {
-                audioDeviceModule.audioInput.setUseAudioRecord(false);
-            }
+            setUseAudioRecord(false);
             Log.i(TAG, "Playback capture attempted: yes");
             return true;
         }
@@ -66,9 +65,7 @@ public class ScreenAudioCaptureController implements JavaAudioDeviceModule.Audio
             mediaProjection = null;
             warnedUnsupported = false;
             releaseAudioRecordLocked();
-            if (audioDeviceModule != null) {
-                audioDeviceModule.audioInput.setUseAudioRecord(true);
-            }
+            setUseAudioRecord(true);
         }
     }
 
@@ -215,6 +212,21 @@ public class ScreenAudioCaptureController implements JavaAudioDeviceModule.Audio
     private void zeroRemainder(ByteBuffer buffer, int start, int end) {
         for (int i = start; i < end; i++) {
             buffer.put(i, (byte) 0);
+        }
+    }
+
+    private void setUseAudioRecord(boolean enabled) {
+        if (audioDeviceModule == null) {
+            return;
+        }
+
+        try {
+            Object audioInput = audioDeviceModule.audioInput;
+            Method method = audioInput.getClass().getDeclaredMethod("setUseAudioRecord", boolean.class);
+            method.setAccessible(true);
+            method.invoke(audioInput, enabled);
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to toggle WebRTC audio input mode", e);
         }
     }
 }
