@@ -40,6 +40,7 @@ public class OrientationAwareScreenCapturer implements VideoCapturer, VideoSink 
     private int oldWidth;
     private int oldHeight;
     private VirtualDisplay virtualDisplay;
+    private Surface surface;
     private SurfaceTextureHelper surfaceTextureHelper;
     private CapturerObserver capturerObserver;
     private long numCapturedFrames = 0;
@@ -159,6 +160,7 @@ public class OrientationAwareScreenCapturer implements VideoCapturer, VideoSink 
                     virtualDisplay.release();
                     virtualDisplay = null;
                 }
+                releaseSurface();
                 if (mediaProjection != null) {
                     // Unregister the callback before stopping, otherwise the callback recursively
                     // calls this method.
@@ -196,7 +198,7 @@ public class OrientationAwareScreenCapturer implements VideoCapturer, VideoSink 
                     @Override
                     public void run() {
                         if (virtualDisplay != null && surfaceTextureHelper != null) {
-                            virtualDisplay.setSurface(new Surface(surfaceTextureHelper.getSurfaceTexture()));
+                            replaceSurface(new Surface(surfaceTextureHelper.getSurfaceTexture()));
                             surfaceTextureHelper.setTextureSize(oldWidth, oldHeight);
                             virtualDisplay.resize(oldWidth, oldHeight, VIRTUAL_DISPLAY_DPI);
                         }
@@ -206,7 +208,7 @@ public class OrientationAwareScreenCapturer implements VideoCapturer, VideoSink 
 
             if (oldWidth > oldHeight) {
                 surfaceTextureHelper.setTextureSize(oldWidth, oldHeight);
-                virtualDisplay.setSurface(new Surface(surfaceTextureHelper.getSurfaceTexture()));
+                replaceSurface(new Surface(surfaceTextureHelper.getSurfaceTexture()));
                 final Handler handler = new Handler(Looper.getMainLooper());
                 handler.postDelayed(new Runnable() {
                     @Override
@@ -228,9 +230,25 @@ public class OrientationAwareScreenCapturer implements VideoCapturer, VideoSink 
     private void createVirtualDisplay() {
         surfaceTextureHelper.setTextureSize(width, height);
         surfaceTextureHelper.getSurfaceTexture().setDefaultBufferSize(width, height);
+        replaceSurface(new Surface(surfaceTextureHelper.getSurfaceTexture()));
         virtualDisplay = mediaProjection.createVirtualDisplay("WebRTC_ScreenCapture", width, height,
-                VIRTUAL_DISPLAY_DPI, DISPLAY_FLAGS, new Surface(surfaceTextureHelper.getSurfaceTexture()),
+                VIRTUAL_DISPLAY_DPI, DISPLAY_FLAGS, surface,
                 null /* callback */, null /* callback handler */);
+    }
+
+    private void replaceSurface(Surface newSurface) {
+        releaseSurface();
+        surface = newSurface;
+        if (virtualDisplay != null) {
+            virtualDisplay.setSurface(surface);
+        }
+    }
+
+    private void releaseSurface() {
+        if (surface != null) {
+            surface.release();
+            surface = null;
+        }
     }
 
     @Override

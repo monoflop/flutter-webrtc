@@ -36,6 +36,8 @@ public class ScreenAudioCaptureController implements JavaAudioDeviceModule.Audio
     private int currentChannelCount;
     private int currentSampleRate;
     private int currentBufferSize;
+    @Nullable
+    private AudioTimestamp audioTimestamp;
 
     public void attachAudioDeviceModule(JavaAudioDeviceModule audioDeviceModule) {
         synchronized (lock) {
@@ -87,6 +89,7 @@ public class ScreenAudioCaptureController implements JavaAudioDeviceModule.Audio
             int sampleRate,
             int bytesRead,
             long captureTimeNs) {
+        int targetBytes = bytesRead > 0 ? bytesRead : buffer.capacity();
         AudioRecord record;
         synchronized (lock) {
             if (!active) {
@@ -102,26 +105,28 @@ public class ScreenAudioCaptureController implements JavaAudioDeviceModule.Audio
                 return captureTimeNs;
             }
 
-            record = ensureAudioRecordLocked(audioFormat, channelCount, sampleRate, bytesRead);
+            record = ensureAudioRecordLocked(audioFormat, channelCount, sampleRate, targetBytes);
             if (record == null) {
                 return captureTimeNs;
             }
         }
 
         buffer.clear();
-        int read = record.read(buffer, bytesRead);
+        int read = record.read(buffer, targetBytes);
         if (read < 0) {
             Log.w(TAG, "Display audio read failed with code " + read + ", sending silence");
-            zeroRemainder(buffer, 0, bytesRead);
+            zeroRemainder(buffer, 0, targetBytes);
             return captureTimeNs;
         }
 
-        if (read < bytesRead) {
-            zeroRemainder(buffer, read, bytesRead);
+        if (read < targetBytes) {
+            zeroRemainder(buffer, read, targetBytes);
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            AudioTimestamp audioTimestamp = new AudioTimestamp();
+            if (audioTimestamp == null) {
+                audioTimestamp = new AudioTimestamp();
+            }
             if (record.getTimestamp(audioTimestamp, AudioTimestamp.TIMEBASE_MONOTONIC) == AudioRecord.SUCCESS) {
                 return audioTimestamp.nanoTime;
             }
@@ -207,6 +212,7 @@ public class ScreenAudioCaptureController implements JavaAudioDeviceModule.Audio
         currentChannelCount = 0;
         currentSampleRate = 0;
         currentBufferSize = 0;
+        audioTimestamp = null;
     }
 
     private void zeroRemainder(ByteBuffer buffer, int start, int end) {
