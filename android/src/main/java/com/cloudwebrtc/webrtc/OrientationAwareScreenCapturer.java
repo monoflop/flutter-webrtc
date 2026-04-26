@@ -227,6 +227,19 @@ public class OrientationAwareScreenCapturer implements VideoCapturer, VideoSink 
         }
     }
 
+    public synchronized void changeCaptureFormatAndUpdateDimensions(
+            final int width, final int height, final int ignoredFramerate) {
+        this.width = width;
+        this.height = height;
+        final int max = Math.max(this.height, this.width);
+        final int min = Math.min(this.height, this.width);
+        if (isDeviceOrientationPortrait()) {
+            changeCaptureFormat(min, max, ignoredFramerate);
+        } else {
+            changeCaptureFormat(max, min, ignoredFramerate);
+        }
+    }
+
     private void createVirtualDisplay() {
         surfaceTextureHelper.setTextureSize(width, height);
         surfaceTextureHelper.getSurfaceTexture().setDefaultBufferSize(width, height);

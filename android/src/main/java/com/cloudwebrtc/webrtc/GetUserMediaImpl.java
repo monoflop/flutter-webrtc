@@ -1093,6 +1093,32 @@ public class GetUserMediaImpl {
         }
     }
 
+    void changeCaptureFormat(String trackId, int width, int height, int frameRate, Result result) {
+        VideoCapturerInfoEx info = mVideoCapturers.get(trackId);
+        if (info == null || info.capturer == null) {
+            resultError(
+                    "mediaStreamTrackChangeCaptureFormat",
+                    "Video capturer not found for id: " + trackId,
+                    result);
+            return;
+        }
+
+        if (!info.isScreenCapture || !(info.capturer instanceof OrientationAwareScreenCapturer)) {
+            resultError(
+                    "mediaStreamTrackChangeCaptureFormat",
+                    "Video capturer is not an active display capturer for id: " + trackId,
+                    result);
+            return;
+        }
+
+        OrientationAwareScreenCapturer capturer = (OrientationAwareScreenCapturer) info.capturer;
+        capturer.changeCaptureFormatAndUpdateDimensions(width, height, frameRate);
+        info.width = width;
+        info.height = height;
+        info.fps = frameRate;
+        result.success(null);
+    }
+
     @RequiresApi(api = VERSION_CODES.M)
     private void requestPermissions(
             final ArrayList<String> permissions,
